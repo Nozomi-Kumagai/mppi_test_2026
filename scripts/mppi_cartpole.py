@@ -45,67 +45,38 @@ class MPPIControllerForCartPole():
         self.u_prev = np.zeros((self.T))
 
     def calc_control_input(self, observed_x: np.ndarray) -> Tuple[float, np.ndarray]:
-        """calculate optimal control input"""
-        # load privious control input sequence
         u = self.u_prev
-
-        # set initial x value from observation
         x0 = observed_x
 
-        # prepare buffer
-        S = np.zeros((self.K)) # state cost list
+        # sample noise: (K, T)
+        epsilon = self._calc_epsilon(self.Sigma, self.K, self.T)
 
-        # sample noise
-        epsilon = self._calc_epsilon(self.Sigma, self.K, self.T) # size is self.K x self.T
+        # build v for all K samples at once: (K, T)
+        n_exploit = int((1.0 - self.param_exploration) * self.K)
+        v = np.empty((self.K, self.T))
+        v[:n_exploit, :] = u[np.newaxis, :] + epsilon[:n_exploit, :]
+        v[n_exploit:, :] = epsilon[n_exploit:, :]
+        v_clamped = np.clip(v, -self.max_force_abs, self.max_force_abs)
 
-        # loop for 0 ~ K-1 samples
-        for k in range(self.K):         
-            # prepare buffer
-            v = np.zeros((self.T)) # control input sequence with noise
+        # initial state for K samples: (K, 4)
+        x = np.tile(x0, (self.K, 1)).astype(np.float64)
+        S = np.zeros((self.K,))
 
-            # set initial(t=0) state x i.e. observed state of the cartpole
-            x = x0
+        # time loop only (K dimension is vectorized)
+        for t in range(self.T):
+            x = self._F_vec(x, v_clamped[:, t])
+            S += self._c_vec(x) + self.param_gamma * u[t] * (1.0/self.Sigma) * v[:, t]
+        S += self._phi_vec(x)
 
-            # loop for time step t = 1 ~ T
-            for t in range(1, self.T+1):
-
-                # get control input with noise
-                if k < (1.0-self.param_exploration)*self.K:
-                    v[t-1] = u[t-1] + epsilon[k, t-1] # sampling for exploitation
-                else:
-                    v[t-1] = epsilon[k, t-1] # sampling for exploration
-
-                # update x
-                x = self._F(x, self._g(v[t-1]))
-
-                # add stage cost
-                S[k] += self._c(x) + self.param_gamma * u[t-1] * (1.0/self.Sigma) * v[t-1]
-
-            # add terminal cost
-            S[k] += self._phi(x)
-
-        # compute information theoretic weights for each sample
+        # weights and update
         w = self._compute_weights(S)
-
-        # calculate w_k * epsilon_k
-        w_epsilon = np.zeros((self.T))
-        for t in range(0, self.T): # loop for time step t = 0 ~ T-1
-            for k in range(self.K):
-                w_epsilon[t] += w[k] * epsilon[k, t]
-
-        # apply moving average filter for smoothing input sequence
+        w_epsilon = (w[:, np.newaxis] * epsilon).sum(axis=0)
         w_epsilon = self._moving_average_filter(xx=w_epsilon, window_size=10)
+        u = u + w_epsilon
 
-        # update control input sequence
-        u += w_epsilon
-
-        # update privious control input sequence (shift 1 step to the left)
         self.u_prev[:-1] = u[1:]
         self.u_prev[-1] = u[-1]
-
-        # return optimal control input and input sequence
-        return u[0], u 
-
+        return u[0], u
     def _calc_epsilon(self, sigma: float, size_sample: int, size_time_step: int) -> np.ndarray:
         """sample epsilon"""
         epsilon = np.random.normal(0.0, sigma, (self.K, self.T)) # size is self.K x self.T
@@ -126,7 +97,14 @@ class MPPIControllerForCartPole():
         # calculate stage cost # (np.cos(theta)+1.0)
         stage_cost = self.stage_cost_weight[0]*x**2 + self.stage_cost_weight[1]*theta**2 + self.stage_cost_weight[2]*x_dot**2 + self.stage_cost_weight[3]*theta_dot**2
         return stage_cost
-
+    
+    def _c_vec(self, x_t):
+        """vectorized version of _c. x_t: (K,4) -> (K,)"""
+        x, theta, x_dot, theta_dot = x_t[:, 0], x_t[:, 1], x_t[:, 2], x_t[:, 3]
+        theta = ((theta + np.pi) % (2 * np.pi)) - np.pi
+        return (self.stage_cost_weight[0]*x**2 + self.stage_cost_weight[1]*theta**2
+                + self.stage_cost_weight[2]*x_dot**2 + self.stage_cost_weight[3]*theta_dot**2)
+    
     def _phi(self, x_T: np.ndarray) -> float:
         """calculate terminal cost"""
         # parse x_T
@@ -137,7 +115,14 @@ class MPPIControllerForCartPole():
         # calculate terminal cost # (np.cos(theta)+1.0)
         terminal_cost = self.terminal_cost_weight[0]*x**2 + self.terminal_cost_weight[1]*theta**2 + self.terminal_cost_weight[2]*x_dot**2 + self.terminal_cost_weight[3]*theta_dot**2
         return terminal_cost
-
+    
+    def _phi_vec(self, x_T):
+        """vectorized version of _phi. x_T: (K,4) -> (K,)"""
+        x, theta, x_dot, theta_dot = x_T[:, 0], x_T[:, 1], x_T[:, 2], x_T[:, 3]
+        theta = ((theta + np.pi) % (2 * np.pi)) - np.pi
+        return (self.terminal_cost_weight[0]*x**2 + self.terminal_cost_weight[1]*theta**2
+                + self.terminal_cost_weight[2]*x_dot**2 + self.terminal_cost_weight[3]*theta_dot**2)
+    
     def _F(self, x_t: np.ndarray, v_t: np.ndarray) -> np.ndarray:
         """calculate next state of the cartpole"""
         # get previous state variables
@@ -171,6 +156,19 @@ class MPPIControllerForCartPole():
         # return updated state
         x_t_plus_1 = np.array([x, theta, x_dot, theta_dot])
         return x_t_plus_1
+    
+    def _F_vec(self, x_t, v_t):
+        """vectorized version of _F. x_t: (K,4), v_t: (K,) -> (K,4)"""
+        x, theta, x_dot, theta_dot = x_t[:, 0], x_t[:, 1], x_t[:, 2], x_t[:, 3]
+        g, M, m, l, dt = self.g, self.mass_of_cart, self.mass_of_pole, self.length_of_pole, self.delta_t
+        f = v_t
+        sin_t, cos_t = np.sin(theta), np.cos(theta)
+        temp = (f - (m*l) * theta_dot**2 * sin_t) / (M + m)
+        new_theta_ddot = (g * sin_t + cos_t * temp) / (l * (4.0/3.0 - m * cos_t**2 / (M + m)))
+        new_x_ddot = temp + (m*l) * new_theta_ddot * cos_t / (M+m)
+        return np.stack([x + x_dot*dt, theta + theta_dot*dt,
+                         x_dot + new_x_ddot*dt, theta_dot + new_theta_ddot*dt], axis=1)
+
 
     def _compute_weights(self, S: np.ndarray) -> np.ndarray:
         """compute weights for each sample"""
