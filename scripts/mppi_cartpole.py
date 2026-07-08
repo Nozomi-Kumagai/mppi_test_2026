@@ -52,7 +52,7 @@ class MPPIControllerForCartPole():
         epsilon = self._calc_epsilon(self.Sigma, self.K, self.T)
 
         # build v for all K samples at once: (K, T)
-        n_exploit = int((1.0 - self.param_exploration) * self.K)
+        n_exploit = int(np.ceil((1.0 - self.param_exploration) * self.K))
         v = np.empty((self.K, self.T))
         v[:n_exploit, :] = u[np.newaxis, :] + epsilon[:n_exploit, :]
         v[n_exploit:, :] = epsilon[n_exploit:, :]
@@ -172,21 +172,10 @@ class MPPIControllerForCartPole():
 
     def _compute_weights(self, S: np.ndarray) -> np.ndarray:
         """compute weights for each sample"""
-        # prepare buffer
-        w = np.zeros((self.K))
-
         # calculate rho
         rho = S.min()
-
-        # calculate eta
-        eta = 0.0
-        for k in range(self.K):
-            eta += np.exp( (-1.0/self.param_lambda) * (S[k]-rho) )
-
-        # calculate weight
-        for k in range(self.K):
-            w[k] = (1.0 / eta) * np.exp( (-1.0/self.param_lambda) * (S[k]-rho) )
-        return w
+        exp_terms = np.exp((-1.0/self.param_lambda) * (S - rho))
+        return exp_terms / exp_terms.sum()
 
     def _moving_average_filter(self, xx: np.ndarray, window_size: int) -> np.ndarray:
         """apply moving average filter for smoothing input sequence
