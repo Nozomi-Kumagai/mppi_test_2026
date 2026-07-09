@@ -70,7 +70,7 @@ class MPPIControllerForPathTracking():
         epsilon = self._calc_epsilon(self.Sigma, self.K, self.T, self.dim_u)
 
         # build control input sequence with noise for all K samples at once: (K, T, dim_u)
-        n_exploit = int((1.0 - self.param_exploration) * self.K)
+        n_exploit = int(np.ceil(1.0 - self.param_exploration) * self.K)
         v = np.empty((self.K, self.T, self.dim_u))
         v[:n_exploit] = u[np.newaxis, :, :] + epsilon[:n_exploit]
         v[n_exploit:] = epsilon[n_exploit:]
@@ -82,13 +82,15 @@ class MPPIControllerForPathTracking():
         S = np.zeros((self.K,))
 
         # storage for sampled trajectories (used for visualization)
-        sampled_traj_list = np.zeros((self.K, self.T, self.dim_x))
+        if self.visualze_sampled_trajs:
+            sampled_traj_list = np.zeros((self.K, self.T, self.dim_x))
 
         # time loop (K dimension is fully vectorized)
         for t in range(self.T):
             v_clamped = self._g_vec(v[:, t, :])  # (K, 2)
             x = self._F_vec(x, v_clamped)        # (K, 4)
-            sampled_traj_list[:, t, :] = x
+            if self.visualze_sampled_trajs:
+                sampled_traj_list[:, t, :] = x
 
             # stage cost + control penalty
             penalty = v[:, t, :] @ (self.Sigma_inv @ u[t])
