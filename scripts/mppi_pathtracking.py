@@ -70,7 +70,7 @@ class MPPIControllerForPathTracking():
         epsilon = self._calc_epsilon(self.Sigma, self.K, self.T, self.dim_u)
 
         # build control input sequence with noise for all K samples at once: (K, T, dim_u)
-        n_exploit = int(np.ceil(1.0 - self.param_exploration) * self.K)
+        n_exploit = int(np.ceil((1.0 - self.param_exploration) * self.K))
         v = np.empty((self.K, self.T, self.dim_u))
         v[:n_exploit] = u[np.newaxis, :, :] + epsilon[:n_exploit]
         v[n_exploit:] = epsilon[n_exploit:]

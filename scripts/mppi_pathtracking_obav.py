@@ -81,7 +81,7 @@ class MPPIControllerForPathTracking():
 
         # build control input sequence with noise for all K samples at once
         # shape (K, T, dim_u)
-        n_exploit = int((1.0 - self.param_exploration) * self.K)
+        n_exploit = int(np.ceil((1.0 - self.param_exploration) * self.K))
         v = np.empty((self.K, self.T, self.dim_u))
         v[:n_exploit] = u[np.newaxis, :, :] + epsilon[:n_exploit]
         v[n_exploit:] = epsilon[n_exploit:]
@@ -130,7 +130,7 @@ class MPPIControllerForPathTracking():
                 x_opt = self._F(x_opt, self._g(u[t].copy()))
                 optimal_traj[t] = x_opt
 
-        # sort sampled trajectories by cost (for visualization layering)
+        # clear sampled trajectories if visualization is disabled
         if not self.visualze_sampled_trajs:
             sampled_traj_list = np.zeros((self.K, self.T, self.dim_x))
 
